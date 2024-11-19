@@ -7,7 +7,6 @@ import torch.distributed as dist
 
 import tree
 import numpy as np
-import torch
 import pandas as pd
 import logging
 import random

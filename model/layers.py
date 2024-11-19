@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import torch
 import math
 from scipy.stats import truncnorm
 from typing import Optional, Callable, List
@@ -185,38 +184,6 @@ class EfficientInteractionDownProjection(torch.nn.Module):
 
         sph = torch.transpose(sph, 1, 2)  # (nEdges, num_spherical, Kmax)
         return rbf_W1, sph
-
-
-class ResidualLayer(torch.nn.Module):
-    """
-    Residual block with output scaled by 1/sqrt(2).
-
-    Parameters
-    ----------
-        units: int
-            Output embedding size.
-        nLayers: int
-            Number of dense layers.
-        activation: str
-            Name of the activation function to use.
-    """
-
-    def __init__(self, units: int, nLayers: int = 2, activation=None, name=None):
-        super().__init__()
-        self.dense_mlp = torch.nn.Sequential(
-            *[
-                Dense(units, units, activation=activation, bias=False)
-                for i in range(nLayers)
-            ]
-        )
-        self.inv_sqrt_2 = 1 / (2.0 ** 0.5)
-
-    def forward(self, inputs):
-        x = self.dense_mlp(inputs)
-        x = inputs + x
-        x = x * self.inv_sqrt_2
-        return x
-
 
 
 def permute_final_dims(tensor: torch.Tensor, inds: List[int]):

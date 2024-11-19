@@ -13,39 +13,34 @@ To modify config options with the command line,
 > python experiments/train_se3_diffusion.py experiment.batch_size=32
 
 """
-import os
-import torch
-import GPUtil
-import time
-import tree
-import numpy as np
-import wandb
 import copy
-import hydra
 import logging
-import copy
+import os
 import random
-import pandas as pd
-
-from collections import defaultdict
-from collections import deque
+import time
+from collections import defaultdict, deque
 from datetime import datetime
-from omegaconf import DictConfig
-from omegaconf import OmegaConf
+
+import GPUtil
+import hydra
+import numpy as np
+import pandas as pd
+import torch
+import torch.distributed as dist
+import tree
+import wandb
+from hydra.core.hydra_config import HydraConfig
+from omegaconf import DictConfig, OmegaConf
 from torch.nn import DataParallel as DP
 from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
-from openfold.utils import rigid_utils as ru
-from hydra.core.hydra_config import HydraConfig
 
-from analysis import utils as au
 from analysis import metrics
-from data import pdb_data_loader
-from data import se3_diffuser
+from analysis import utils as au
+from data import all_atom, pdb_data_loader, se3_diffuser
 from data import utils as du
-from data import all_atom
-from model import score_network
 from experiments import utils as eu
+from model import score_network
+from openfold.utils import rigid_utils as ru
 
 
 class Experiment:
@@ -451,7 +446,7 @@ class Experiment:
                         title="Encountered NaN loss",
                         text=f"Loss NaN after {self.trained_epochs} epochs, {self.trained_steps} steps"
                     )
-                raise Exception(f'NaN encountered')
+                raise Exception('NaN encountered')
 
         if return_logs:
             return global_logs
@@ -800,7 +795,8 @@ class Experiment:
 
         # Flip trajectory so that it starts from t=0.
         # This helps visualization.
-        flip = lambda x: np.flip(np.stack(x), (0,))
+        def flip(x):
+            return np.flip(np.stack(x), (0,))
         all_bb_prots = flip(all_bb_prots)
         if aux_traj:
             all_rigids = flip(all_rigids)

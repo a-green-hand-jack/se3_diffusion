@@ -1,3 +1,5 @@
+# ruff: noqa: F401, E741, F841, F811, E731
+
 import pickle
 import os
 from typing import Any
@@ -57,7 +59,8 @@ class CPU_Unpickler(pickle.Unpickler):
     def find_class(self, module, name):
         if module == 'torch.storage' and name == '_load_from_bytes':
             return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
-        else: return super().find_class(module, name)
+        else: 
+            return super().find_class(module, name)
 
 def write_pkl(
         save_path: str, pkl_data: Any, create_dir: bool = False, use_torch=False):

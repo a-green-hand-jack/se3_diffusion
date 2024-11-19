@@ -1198,16 +1198,27 @@ class Rigid:
         return Rigid(rots, trans)
 
     def to_tensor_7(self) -> torch.Tensor:
+        """将刚体变换转换为7维张量表示
+        
+        刚体变换包含两部分:
+        1. 旋转(用四元数表示): [w,x,y,z] - 4维
+        2. 平移向量: [x,y,z] - 3维
+        
+        将这两部分拼接成一个7维向量: [qw,qx,qy,qz, tx,ty,tz]
+        
+        Returns:
+            torch.Tensor: [..., 7] 形状的张量,其中:
+                - [..., 0:4] 存储四元数(旋转)
+                - [..., 4:7] 存储平移向量
         """
-            Converts a transformation to a tensor with 7 final columns, four 
-            for the quaternion followed by three for the translation.
-
-            Returns:
-                A [*, 7] tensor representation of the transformation
-        """
+        # 创建一个新的全零张量,形状为 batch_dims + [7]
         tensor = self._trans.new_zeros((*self.shape, 7))
-        tensor[..., :4] = self._rots.get_quats()
-        tensor[..., 4:] = self._trans
+        
+        # 填充四元数部分(前4维)
+        tensor[..., :4] = self._rots.get_quats()  # [w,x,y,z]
+        
+        # 填充平移向量部分(后3维)
+        tensor[..., 4:] = self._trans  # [x,y,z]
 
         return tensor
 
@@ -1255,11 +1266,11 @@ class Rigid:
         e0 = [c1 - c2 for c1, c2 in zip(origin, p_neg_x_axis)]
         e1 = [c1 - c2 for c1, c2 in zip(p_xy_plane, origin)]
 
-        denom = torch.sqrt(sum((c * c for c in e0)) + eps)
+        denom = torch.sqrt(sum((c * c for c in e0))) + eps
         e0 = [c / denom for c in e0]
         dot = sum((c1 * c2 for c1, c2 in zip(e0, e1)))
         e1 = [c2 - c1 * dot for c1, c2 in zip(e0, e1)]
-        denom = torch.sqrt(sum((c * c for c in e1)) + eps)
+        denom = torch.sqrt(sum((c * c for c in e1))) + eps
         e1 = [c / denom for c in e1]
         e2 = [
             e0[1] * e1[2] - e0[2] * e1[1],
