@@ -182,4 +182,6 @@ pynb/
 
 #slurm_output for record
 slurm_output/
-.ssh_jieke/*
+.ssh_jieke/config
+.ssh_jieke/id_rsa_jieke
+.ssh_jieke/id_rsa_jieke.pub
