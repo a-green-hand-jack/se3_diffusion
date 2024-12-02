@@ -37,6 +37,7 @@ class R3Diffuser:
     - 分子动力学研究
     """
 
+    # 1. 基础设置
     def __init__(self, r3_conf: Any) -> None:
         """初始化R3Diffuser对象。
 
@@ -86,8 +87,10 @@ class R3Diffuser:
         """
         return x / self._r3_conf.coordinate_scaling
 
+    # 2. 基本数学函数
     def b_t(self, t: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         """计算时间t处的方差调度值。
+        源自 ：Score-Based Generative Modeling through Stochastic Differential Equations EQ：32
 
         Args:
             t: 时间点，范围必须在[0,1]内
@@ -102,6 +105,23 @@ class R3Diffuser:
         if np.any(t < 0) or np.any(t > 1):
             raise ValueError(f"Invalid t={t}")
         return self.min_b + t * (self.max_b - self.min_b)
+
+    def marginal_b_t(self, t: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """计算边际方差调度。
+        源自：Score-Based Generative Modeling through Stochastic Differential Equations EQ：33
+        这里是得到了从 t=0 到 t=1 的每一时间步的噪音的分布
+        Args:
+            t: 时间点，范围在[0,1]内
+
+        Returns:
+            边际方差值
+
+        数学原理：
+        这个函数定义了从初始分布到目标噪声分布的插值路径，
+        采用二次函数形式：t*min_b + (t²/2)*(max_b-min_b)
+        """
+        
+        return t * self.min_b + (1 / 2) * (t**2) * (self.max_b - self.min_b)
 
     def diffusion_coef(self, t: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         """计算扩散系数，即SDE中的g(t)。
@@ -122,13 +142,14 @@ class R3Diffuser:
         self, x: Union[np.ndarray, torch.Tensor], t: Union[float, np.ndarray]
     ) -> Union[np.ndarray, torch.Tensor]:
         """计算漂移系数，即SDE中的f(x,t)。
+        源自： Score-Based Generative Modeling through Stochastic Differential Equations EQ：32
 
         Args:
             x: 当前状态坐标
             t: 时间点
 
         Returns:
-            漂移系数值 f(x,t) = -1/2 * β(t) * x
+            漂移系数值 f(x,t) = -1/2 * β(t) * x， 这里等价于 f(x, t) = f(t) * x
 
         数学背景：
         漂移项决定了系统的确定性演化部分，
@@ -136,6 +157,27 @@ class R3Diffuser:
         """
         return -1 / 2 * self.b_t(t) * x
 
+    def conditional_var(
+        self, t: Union[float, np.ndarray], use_torch: bool = False
+    ) -> Union[float, np.ndarray, torch.Tensor]:
+        """计算条件方差 p(x_t|x_0)。
+
+        Args:
+            t: 时间点，范围[0,1]
+            use_torch: 是否使用PyTorch计算
+
+        Returns:
+            条件方差值 Var[x_t|x_0] = conditional_var(t)*I
+
+        数学原理：
+        条件方差描述了给定初始状态时，t时刻状态的不确定性：
+        Var[x_t|x_0] = 1 - exp(-β(t))
+        """
+        if use_torch:
+            return 1 - torch.exp(-self.marginal_b_t(t))
+        return 1 - np.exp(-self.marginal_b_t(t))
+
+    # 3. 前向过程相关方法
     def sample_ref(self, n_samples: int = 1) -> np.ndarray:
         """采样参考噪声。
 
@@ -150,49 +192,6 @@ class R3Diffuser:
         采用标准正态分布N(0,1)。
         """
         return np.random.normal(size=(n_samples, 3))
-
-    def marginal_b_t(self, t: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        """计算边际方差调度。
-
-        Args:
-            t: 时间点，范围在[0,1]内
-
-        Returns:
-            边际方差值
-
-        数学原理：
-        这个函数定义了从初始分布到目标噪声分布的插值路径，
-        采用二次函数形式：t*min_b + (t²/2)*(max_b-min_b)
-        """
-        return t * self.min_b + (1 / 2) * (t**2) * (self.max_b - self.min_b)
-
-    def calc_trans_0(
-        self,
-        score_t: Union[np.ndarray, torch.Tensor],
-        x_t: Union[np.ndarray, torch.Tensor],
-        t: Union[float, np.ndarray],
-        use_torch: bool = True,
-    ) -> Union[np.ndarray, torch.Tensor]:
-        """计算从时间t到时间0的转移。
-
-        Args:
-            score_t: t时刻的score值
-            x_t: t时刻的状态
-            t: 时间点
-            use_torch: 是否使用PyTorch计算
-
-        Returns:
-            预测的时间0状态
-
-        数学原理：
-        基于score function的条件期望计算，
-        使用指数缩放和条件方差进行状态转换。
-        """
-        beta_t = self.marginal_b_t(t)
-        beta_t = beta_t[..., None, None]
-        exp_fn = torch.exp if use_torch else np.exp
-        cond_var = 1 - exp_fn(-beta_t)
-        return (score_t * cond_var + x_t) / exp_fn(-1 / 2 * beta_t)
 
     def forward(self, x_t_1: torch.Tensor, t: float, num_t: int) -> torch.Tensor:
         """采样条件分布 p(x(t) | x(t-1))。
@@ -220,44 +219,6 @@ class R3Diffuser:
         x_t = torch.sqrt(1 - b_t) * x_t_1 + torch.sqrt(b_t) * z_t_1
         return x_t
 
-    def distribution(
-        self,
-        x_t: Union[np.ndarray, torch.Tensor],
-        score_t: Union[np.ndarray, torch.Tensor],
-        t: float,
-        mask: Optional[np.ndarray],
-        dt: float,
-    ) -> Tuple[Union[np.ndarray, torch.Tensor], Union[float, np.ndarray]]:
-        """计算扩散过程的分布参数。
-
-        该函数计算扩散过程中下一时刻状态的分布参数（均值和标准差）。
-
-        Args:
-            x_t: 形状为[..., n, 3]的当前状态坐标
-            score_t: 形状为[..., n, 3]的score函数值
-            t: 当前时间点
-            mask: 可选的掩码数组，指示哪些部分参与扩散
-            dt: 时间步长
-
-        Returns:
-            Tuple[mu, std]:
-                mu: 下一时刻状态的均值
-                std: 下一时刻状态的标准差
-
-        数学原理：
-        基于Fokker-Planck方程，计算转移概率分布的参数：
-        μ = x_t - (f_t - g_t²*score_t)*dt
-        σ = g_t*sqrt(dt)
-        """
-        x_t = self._scale(x_t)
-        g_t = self.diffusion_coef(t)
-        f_t = self.drift_coef(x_t, t)
-        std = g_t * np.sqrt(dt)
-        mu = x_t - (f_t - g_t**2 * score_t) * dt
-        if mask is not None:
-            mu *= mask[..., None]
-        return mu, std
-
     def forward_marginal(
         self, x_0: np.ndarray, t: float
     ) -> Tuple[np.ndarray, np.ndarray]:
@@ -265,6 +226,7 @@ class R3Diffuser:
 
         该函数实现了从初始状态直接采样t时刻状态的操作，
         不需要逐步模拟中间过程。
+        源自：Score-Based Generative Modeling through Stochastic Differential Equations EQ：33
 
         Args:
             x_0: 形状为[..., n, 3]的初始位置坐标（埃米单位）
@@ -291,20 +253,45 @@ class R3Diffuser:
         x_t = self._unscale(x_t)
         return x_t, score_t
 
-    def score_scaling(self, t: float) -> float:
-        """计算score函数的缩放因子。
+    # 4. 反向过程相关方法
+    def distribution(
+        self,
+        x_t: Union[np.ndarray, torch.Tensor],
+        score_t: Union[np.ndarray, torch.Tensor],
+        t: float,
+        mask: Optional[np.ndarray],
+        dt: float,
+    ) -> Tuple[Union[np.ndarray, torch.Tensor], Union[float, np.ndarray]]:
+        """计算扩散过程的分布参数。
+
+        该函数计算扩散过程中下一时刻状态的分布参数（均值和标准差）。
+        这里对应的 reverse 过程
 
         Args:
-            t: 时间点，范围在[0,1]内
+            x_t: 形状为[..., n, 3]的当前状态坐标
+            score_t: 形状为[..., n, 3]的score函数值
+            t: 当前时间点
+            mask: 可选的掩码数组，指示哪些部分参与扩散
+            dt: 时间步长
 
         Returns:
-            score的缩放系数，用于归一化score值
+            Tuple[mu, std]:
+                mu: 下一时刻状态的均值
+                std: 下一时刻状态的标准差
 
         数学原理：
-        score缩放系数是条件方差的倒数的平方根，
-        用于保持score函数在不同时间尺度上的一致性。
+        基于Fokker-Planck方程，计算转移概率分布的参数：
+        μ = x_t - (f_t - g_t²*score_t)*dt
+        σ = g_t*sqrt(dt)
         """
-        return 1 / np.sqrt(self.conditional_var(t))
+        x_t = self._scale(x_t)
+        g_t = self.diffusion_coef(t)
+        f_t = self.drift_coef(x_t, t)
+        std = g_t * np.sqrt(dt)
+        mu = x_t - (f_t - g_t**2 * score_t) * dt
+        if mask is not None:
+            mu *= mask[..., None]
+        return mu, std
 
     def reverse(
         self,
@@ -358,26 +345,7 @@ class R3Diffuser:
         x_t_1 = self._unscale(x_t_1)
         return x_t_1
 
-    def conditional_var(
-        self, t: Union[float, np.ndarray], use_torch: bool = False
-    ) -> Union[float, np.ndarray, torch.Tensor]:
-        """计算条件方差 p(x_t|x_0)。
-
-        Args:
-            t: 时间点，范围[0,1]
-            use_torch: 是否使用PyTorch计算
-
-        Returns:
-            条件方差值 Var[x_t|x_0] = conditional_var(t)*I
-
-        数学原理：
-        条件方差描述了给定初始状态时，t时刻状态的不确定性：
-        Var[x_t|x_0] = 1 - exp(-β(t))
-        """
-        if use_torch:
-            return 1 - torch.exp(-self.marginal_b_t(t))
-        return 1 - np.exp(-self.marginal_b_t(t))
-
+    # 5. Score相关方法
     def score(
         self,
         x_t: Union[np.ndarray, torch.Tensor],
@@ -412,3 +380,48 @@ class R3Diffuser:
         return -(
             x_t - exp_fn(-1 / 2 * self.marginal_b_t(t)) * x_0
         ) / self.conditional_var(t, use_torch=use_torch)
+
+    def score_scaling(self, t: float) -> float:
+        """计算score函数的缩放因子。
+        源自：Score-Based Generative Modeling through Stochastic Differential Equations P：4 底部
+
+        Args:
+            t: 时间点，范围在[0,1]内
+
+        Returns:
+            score的缩放系数，用于归一化score值
+
+        数学原理：
+        score缩放系数是条件方差的倒数的平方根，
+        用于保持score函数在不同时间尺度上的一致性。
+        """
+        return 1 / np.sqrt(self.conditional_var(t))
+
+    def calc_trans_0(
+        self,
+        score_t: Union[np.ndarray, torch.Tensor],
+        x_t: Union[np.ndarray, torch.Tensor],
+        t: Union[float, np.ndarray],
+        use_torch: bool = True,
+    ) -> Union[np.ndarray, torch.Tensor]:
+        """计算从时间t到时间0的转移。
+
+        Args:
+            score_t: t时刻的score值
+            x_t: t时刻的状态
+            t: 时间点
+            use_torch: 是否使用PyTorch计算
+
+        Returns:
+            预测的时间0状态
+
+        数学原理：
+        基于score function的条件期望计算，
+        使用指数缩放和条件方差进行状态转换。
+        """
+        
+        beta_t = self.marginal_b_t(t)
+        beta_t = beta_t[..., None, None]
+        exp_fn = torch.exp if use_torch else np.exp
+        cond_var = 1 - exp_fn(-beta_t)
+        return (score_t * cond_var + x_t) / exp_fn(-1 / 2 * beta_t)

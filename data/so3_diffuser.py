@@ -299,6 +299,7 @@ class SO3Diffuser:
     - 提供批量处理能力
     """
 
+    # 1. 基础设置
     def __init__(self, so3_conf) -> None:
         """初始化 SO3Diffuser.
 
@@ -397,6 +398,7 @@ class SO3Diffuser:
             )
         ) / np.sqrt(3)
 
+    # 2. 时间和 sigma 相关的基础函数
     @property
     def discrete_sigma(self) -> np.ndarray:
         """获取离散化的 sigma 值数组.
@@ -405,17 +407,6 @@ class SO3Diffuser:
             np.ndarray: 在 [0, 1] 区间上均匀分布的 num_sigma 个点
         """
         return self.sigma(np.linspace(0.0, 1.0, self.num_sigma))
-
-    def sigma_idx(self, sigma: np.ndarray) -> np.ndarray:
-        """计算给定 sigma 值对应的离散索引.
-
-        参数:
-            sigma: np.ndarray - 需要查找索引的 sigma 值
-
-        返回:
-            np.ndarray: sigma 值对应的离散索引
-        """
-        return np.digitize(sigma, self.discrete_sigma) - 1
 
     def sigma(self, t: np.ndarray) -> np.ndarray:
         """根据选择的时间表计算 sigma(t) 值.
@@ -456,6 +447,28 @@ class SO3Diffuser:
         else:
             raise ValueError(f"未知的时间表类型 {self.schedule}")
 
+    def sigma_idx(self, sigma: np.ndarray) -> np.ndarray:
+        """计算给定 sigma 值对应的离散索引.
+
+        参数:
+            sigma: np.ndarray - 需要查找索引的 sigma 值
+
+        返回:
+            np.ndarray: sigma 值对应的离散索引
+        """
+        return np.digitize(sigma, self.discrete_sigma) - 1
+
+    def t_to_idx(self, t: np.ndarray) -> np.ndarray:
+        """将连续时间 t 转换为对应的 sigma 索引.
+
+        参数:
+            t: np.ndarray - 连续时间值
+
+        返回:
+            np.ndarray: 对应的 sigma 索引
+        """
+        return self.sigma_idx(self.sigma(t))
+
     def diffusion_coef(self, t: float) -> np.ndarray:
         """计算扩散系数 (g_t).
 
@@ -486,17 +499,7 @@ class SO3Diffuser:
             raise ValueError(f"未知的时间表类型 {self.schedule}")
         return g_t
 
-    def t_to_idx(self, t: np.ndarray) -> np.ndarray:
-        """将连续时间 t 转换为对应的 sigma 索引.
-
-        参数:
-            t: np.ndarray - 连续时间值
-
-        返回:
-            np.ndarray: 对应的 sigma 索引
-        """
-        return self.sigma_idx(self.sigma(t))
-
+    # 3. 采样相关方法
     def sample_igso3(self, t: float, n_samples: int = 1) -> np.ndarray:
         """使用逆 CDF 方法从 IGSO(3) 分布采样旋转角度.
 
@@ -565,6 +568,7 @@ class SO3Diffuser:
         """
         return self.sample(1, n_samples=n_samples)
 
+    # 4. Score 相关方法
     def score(self, vec: np.ndarray, t: float, eps: float = 1e-6) -> np.ndarray:
         """计算 IGSO(3) 密度的评分函数（以旋转向量形式）.
 
@@ -594,12 +598,7 @@ class SO3Diffuser:
         torch_score = self.torch_score(torch.tensor(vec), torch.tensor(t)[None])
         return torch_score.numpy()
 
-    def torch_score(
-        self,
-        vec: torch.Tensor,
-        t: torch.Tensor,
-        eps: float = 1e-6,
-    ) -> torch.Tensor:
+    def torch_score(self, vec: torch.Tensor, t: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
         """使用 PyTorch 计算 IGSO(3) 密度的评分函数.
 
         理论背景:
@@ -674,9 +673,8 @@ class SO3Diffuser:
         """
         return self._score_scaling[self.t_to_idx(t)]
 
-    def forward_marginal(
-        self, rot_0: np.ndarray, t: float
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    # 5. 扩散过程相关方法
+    def forward_marginal(self, rot_0: np.ndarray, t: float) -> Tuple[np.ndarray, np.ndarray]:
         """在时间 t 对初始旋转进行前向扩散采样.
 
         理论背景:
@@ -710,15 +708,8 @@ class SO3Diffuser:
         rot_t = du.compose_rotvec(rot_0, sampled_rots).reshape(rot_0.shape)
         return rot_t, rot_score
 
-    def reverse(
-        self,
-        rot_t: np.ndarray,
-        score_t: np.ndarray,
-        t: float,
-        dt: float,
-        mask: Optional[np.ndarray] = None,
-        noise_scale: float = 1.0,
-    ) -> np.ndarray:
+    def reverse(self, rot_t: np.ndarray, score_t: np.ndarray, t: float, dt: float,
+                mask: Optional[np.ndarray] = None, noise_scale: float = 1.0) -> np.ndarray:
         """模拟一步反向 SDE，使用测地线随机游走.
 
         理论背景:
