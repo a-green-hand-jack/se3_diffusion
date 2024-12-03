@@ -97,12 +97,12 @@ def igso3_expansion(
     # exp(-l(l+1)*eps^2/2): 高斯衰减项
     # sin(omega*(l+1/2))/sin(omega/2): 特征函数项
     # 幂级数展开的形式为:
-    # p(R|σ) = Σ (2l + 1) * exp(-l(l+1)σ²/2) * χl(R)
+    # P(R|σ) = Σp; 
+    # p = (2l + 1) * exp(-l(l+1)σ²/2) * χl(R)
     p = (
         (2 * ls + 1)
         * lib.exp(-ls * (ls + 1) * eps**2 / 2)
-        * lib.sin(omega * (ls + 1 / 2))
-        / lib.sin(omega / 2)
+        * (lib.sin(omega * (ls + 1 / 2)) / lib.sin(omega / 2))
     )
 
     # 沿最后一个维度求和得到最终结果
@@ -533,6 +533,11 @@ class SO3Diffuser:
         """从 IGSO(3) 分布生成旋转向量.
 
         理论背景:
+        - 从 X(0) 到 X(T) 的过程中，遵循 dx = f(x,t)dt + g(t)dw
+        - 这里的 f(x,t) 和 g(t) 都是事先约定好的关于 x 和 t 的函数
+        - 但是因为我们这里是在 SO3 上，所以需要一些特殊的 f(x,t) 和 g(t)
+        - 这里其实是定义了 f(x, t) = 0 和 g(t) = sigma(t)
+
         - 生成的旋转向量遵循 IGSO(3) 分布
         - 向量的方向均匀分布在单位球面上
         - 向量的长度由 sample_igso3 确定
@@ -549,7 +554,7 @@ class SO3Diffuser:
         返回:
             np.ndarray: shape [n_samples, 3] 的轴角旋转向量
         """
-        # 生成随机单位向量
+        # 生成随机单位向量,， 其实就是 dw
         x = np.random.randn(n_samples, 3)
         x /= np.linalg.norm(x, axis=-1, keepdims=True)
         # 缩放到采样的旋转角度
@@ -559,6 +564,7 @@ class SO3Diffuser:
         """生成参考分布的样本.
 
         这是一个便捷方法，等价于在 t=1 时采样
+        这里得到的就是前向过程的最后的情况了，也即是完全的噪音
 
         参数:
             n_samples: int, 默认值=1 - 样本数量
@@ -598,7 +604,9 @@ class SO3Diffuser:
         torch_score = self.torch_score(torch.tensor(vec), torch.tensor(t)[None])
         return torch_score.numpy()
 
-    def torch_score(self, vec: torch.Tensor, t: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    def torch_score(
+        self, vec: torch.Tensor, t: torch.Tensor, eps: float = 1e-6
+    ) -> torch.Tensor:
         """使用 PyTorch 计算 IGSO(3) 密度的评分函数.
 
         理论背景:
@@ -674,7 +682,9 @@ class SO3Diffuser:
         return self._score_scaling[self.t_to_idx(t)]
 
     # 5. 扩散过程相关方法
-    def forward_marginal(self, rot_0: np.ndarray, t: float) -> Tuple[np.ndarray, np.ndarray]:
+    def forward_marginal(
+        self, rot_0: np.ndarray, t: float
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """在时间 t 对初始旋转进行前向扩散采样.
 
         理论背景:
@@ -690,6 +700,7 @@ class SO3Diffuser:
         参数:
             rot_0: np.ndarray
                 shape [..., 3] 的初始旋转向量
+                也就是真实的蛋白质的旋转的情况
             t: float
                 连续时间值，范围 [0, 1]
 
@@ -708,8 +719,15 @@ class SO3Diffuser:
         rot_t = du.compose_rotvec(rot_0, sampled_rots).reshape(rot_0.shape)
         return rot_t, rot_score
 
-    def reverse(self, rot_t: np.ndarray, score_t: np.ndarray, t: float, dt: float,
-                mask: Optional[np.ndarray] = None, noise_scale: float = 1.0) -> np.ndarray:
+    def reverse(
+        self,
+        rot_t: np.ndarray,
+        score_t: np.ndarray,
+        t: float,
+        dt: float,
+        mask: Optional[np.ndarray] = None,
+        noise_scale: float = 1.0,
+    ) -> np.ndarray:
         """模拟一步反向 SDE，使用测地线随机游走.
 
         理论背景:
@@ -760,6 +778,8 @@ class SO3Diffuser:
         # 生成随机噪声
         z = noise_scale * np.random.normal(size=score_t.shape)
         # 计算更新量
+        # math: g(t)^2 * score_d * dt + g(t) * d(\bar{w})
+        #       = g(t)^2 * score_t * dt + g(t) * sqrt(dt) * z
         perturb = (g_t**2) * score_t * dt + g_t * np.sqrt(dt) * z
 
         # 应用掩码（如果提供）
